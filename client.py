@@ -23,9 +23,10 @@ except ImportError:
     print("To fix on Fedora: sudo dnf install python3-pillow-tk")
 
 # --- CONFIGURATION ---
-HOST = "127.0.0.1"  # Localhost
+HOST = "127.0.0.1"  # Localhost (default, overridden by selected profile)
 USER = os.path.expanduser("~").split(os.sep)[-1] or "user"
-KEY_PATH = os.path.expanduser("~/.ssh/id_ed25519")
+KEY_PATH = os.path.expanduser("~/.ssh/id_ed25519")  # default fallback if agent/key selection fails
+SETTINGS_FILE = os.path.expanduser("~/.neural_ssh_hosts.json")
 
 def get_openai_key():
     try:
@@ -53,6 +54,8 @@ class RemoteExplorer(tk.Tk):
         self.current_path = os.getcwd() # Default to current dir for local mode
         self.use_local_mode = False
         self.fs_context = ""  # Store the file system overview
+        self.settings = {}
+        self.active_host_name = "default"
         
         # Navigation History
         self.history_back = []
@@ -69,6 +72,10 @@ class RemoteExplorer(tk.Tk):
             return
 
         self.ai_client = OpenAI(api_key=OPENAI_KEY)
+
+        # Load settings after GUI init variables are in place
+        self.settings = self.load_settings()
+        self.active_host_name = list(self.settings.keys())[0] if self.settings else "default"
 
         self.create_gui()
         self.connect_ssh()
@@ -183,9 +190,18 @@ class RemoteExplorer(tk.Tk):
         header_frame.pack(fill="x")
         tk.Label(header_frame, text="STORAGE", bg=COLORS["header_bg"], fg=COLORS["accent"], font=FONT_HEADER).pack(side="left")
         
+        # Host selector dropdown
+        host_names = list(self.settings.keys()) if self.settings else ["default"]
+        if self.active_host_name not in host_names:
+            self.active_host_name = host_names[0]
+        self.host_var = tk.StringVar(value=self.active_host_name)
+        self.host_menu = ttk.Combobox(header_frame, textvariable=self.host_var, values=host_names, state="readonly", width=18)
+        self.host_menu.pack(side="right", padx=(5,0))
+        self.host_menu.bind("<<ComboboxSelected>>", self.on_host_change)
+        
         # Path Breadcrumb style
         self.path_label = tk.Label(header_frame, text=self.current_path, bg=COLORS["header_bg"], fg=COLORS["fg_dim"], font=("Roboto", 9))
-        self.path_label.pack(side="right")
+        self.path_label.pack(side="right", padx=(10,5))
 
         # Treeview Container
         tree_frame = tk.Frame(self.frame_mid, bg=COLORS["panel"])
@@ -220,6 +236,7 @@ class RemoteExplorer(tk.Tk):
         ttk.Button(nav_frame, text="←", command=self.go_back, width=4).pack(side="left", padx=(0, 5))
         ttk.Button(nav_frame, text="→", command=self.go_fwd, width=4).pack(side="left", padx=5)
         ttk.Button(nav_frame, text="⟳ Refresh", command=self.refresh_files).pack(side="left", padx=5)
+        ttk.Button(nav_frame, text="Settings", command=self.open_settings_dialog).pack(side="right", padx=5)
 
         # --- RIGHT PANE: AI Command ---
         self.frame_right = tk.Frame(self.paned_window, bg=COLORS["panel"])
@@ -263,6 +280,180 @@ class RemoteExplorer(tk.Tk):
         else:
             self.log_ai("Warning: pystray not installed; tray icon disabled.")
 
+    # --- SETTINGS / HOST PROFILES ---
+    def load_settings(self):
+        default = {"default": {"host": HOST, "user": USER, "key_path": KEY_PATH}}
+        try:
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, "r") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and data:
+                        return data
+        except Exception as e:
+            print(f"Warning: failed to load settings: {e}")
+        return default
+
+    def save_settings(self):
+        try:
+            with open(SETTINGS_FILE, "w") as f:
+                json.dump(self.settings, f, indent=2)
+        except Exception as e:
+            self.log_ai(f"Warning: failed to save settings: {e}")
+
+    def get_active_host_profile(self):
+        name = None
+        if hasattr(self, "host_var"):
+            try:
+                name = self.host_var.get()
+            except:
+                name = None
+        if not name:
+            name = self.active_host_name
+        profile = self.settings.get(name)
+        if not profile:
+            profile = self.settings.get("default", {"host": HOST, "user": USER, "key_path": KEY_PATH})
+        return profile
+
+    def refresh_host_dropdown(self, select_name=None):
+        host_names = list(self.settings.keys()) if self.settings else ["default"]
+        if not host_names:
+            host_names = ["default"]
+        if select_name and select_name in host_names:
+            self.active_host_name = select_name
+        elif self.active_host_name not in host_names:
+            self.active_host_name = host_names[0]
+        self.host_menu["values"] = host_names
+        self.host_var.set(self.active_host_name)
+
+    def resolve_key_path(self, profile):
+        # Prefer explicit key in profile
+        if profile.get("key_path"):
+            return os.path.expanduser(profile["key_path"])
+        # Env override
+        env_key = os.environ.get("SSH_KEY_PATH")
+        if env_key:
+            return os.path.expanduser(env_key)
+        # Fall back to common keys
+        candidates = ["~/.ssh/id_ed25519", "~/.ssh/id_rsa", "~/.ssh/id_ecdsa"]
+        for c in candidates:
+            path = os.path.expanduser(c)
+            if os.path.exists(path):
+                return path
+        # As last resort, None (paramiko will try agent if available)
+        return None
+
+    def on_host_change(self, event=None):
+        # Switch active host profile and reconnect
+        self.active_host_name = self.host_var.get()
+        # Close existing SSH if any
+        try:
+            if self.sftp:
+                self.sftp.close()
+            if self.ssh:
+                self.ssh.close()
+        except:
+            pass
+        # Reset state
+        self.current_path = "."
+        self.history_back.clear()
+        self.history_fwd.clear()
+        # Reconnect
+        self.connect_ssh()
+
+    def open_settings_dialog(self):
+        dlg = tk.Toplevel(self)
+        dlg.title("Host Settings")
+        dlg.configure(bg=self.COLORS["panel"])
+        dlg.geometry("520x360")
+        dlg.resizable(False, False)
+
+        # Listbox of hosts
+        frame_list = tk.Frame(dlg, bg=self.COLORS["panel"])
+        frame_list.pack(side="left", fill="y", padx=10, pady=10)
+        lb = tk.Listbox(frame_list, height=12, bg=self.COLORS["input"], fg=self.COLORS["fg"], selectbackground=self.COLORS["select"])
+        lb.pack(fill="both", expand=True)
+
+        def load_list():
+            lb.delete(0, tk.END)
+            for name in self.settings.keys():
+                lb.insert(tk.END, name)
+            if self.active_host_name in self.settings:
+                idx = list(self.settings.keys()).index(self.active_host_name)
+                lb.selection_set(idx)
+                lb.activate(idx)
+                populate_fields(self.active_host_name)
+
+        # Fields
+        frame_fields = tk.Frame(dlg, bg=self.COLORS["panel"])
+        frame_fields.pack(side="right", fill="both", expand=True, padx=10, pady=10)
+
+        tk.Label(frame_fields, text="Name", bg=self.COLORS["panel"], fg=self.COLORS["fg"]).grid(row=0, column=0, sticky="w")
+        tk.Label(frame_fields, text="Host", bg=self.COLORS["panel"], fg=self.COLORS["fg"]).grid(row=1, column=0, sticky="w")
+        tk.Label(frame_fields, text="User", bg=self.COLORS["panel"], fg=self.COLORS["fg"]).grid(row=2, column=0, sticky="w")
+        tk.Label(frame_fields, text="Key Path", bg=self.COLORS["panel"], fg=self.COLORS["fg"]).grid(row=3, column=0, sticky="w")
+
+        name_var = tk.StringVar()
+        host_var = tk.StringVar()
+        user_var = tk.StringVar()
+        key_var = tk.StringVar()
+
+        tk.Entry(frame_fields, textvariable=name_var, bg=self.COLORS["input"], fg=self.COLORS["fg"], relief="flat").grid(row=0, column=1, sticky="ew", pady=2)
+        tk.Entry(frame_fields, textvariable=host_var, bg=self.COLORS["input"], fg=self.COLORS["fg"], relief="flat").grid(row=1, column=1, sticky="ew", pady=2)
+        tk.Entry(frame_fields, textvariable=user_var, bg=self.COLORS["input"], fg=self.COLORS["fg"], relief="flat").grid(row=2, column=1, sticky="ew", pady=2)
+        tk.Entry(frame_fields, textvariable=key_var, bg=self.COLORS["input"], fg=self.COLORS["fg"], relief="flat").grid(row=3, column=1, sticky="ew", pady=2)
+        frame_fields.grid_columnconfigure(1, weight=1)
+
+        def populate_fields(name):
+            profile = self.settings.get(name, {})
+            name_var.set(name)
+            host_var.set(profile.get("host", ""))
+            user_var.set(profile.get("user", ""))
+            key_var.set(profile.get("key_path", ""))
+
+        def on_select(event=None):
+            sel = lb.curselection()
+            if not sel: return
+            name = lb.get(sel[0])
+            populate_fields(name)
+
+        lb.bind("<<ListboxSelect>>", on_select)
+
+        # Buttons
+        btn_frame = tk.Frame(frame_fields, bg=self.COLORS["panel"])
+        btn_frame.grid(row=4, column=0, columnspan=2, pady=10, sticky="e")
+
+        def add_or_update():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("Missing name", "Please enter a profile name.")
+                return
+            self.settings[name] = {
+                "host": host_var.get().strip(),
+                "user": user_var.get().strip(),
+                "key_path": key_var.get().strip()
+            }
+            self.save_settings()
+            load_list()
+            self.refresh_host_dropdown(select_name=name)
+
+        def delete():
+            sel = lb.curselection()
+            if not sel: return
+            name = lb.get(sel[0])
+            if name == "default":
+                messagebox.showwarning("Not allowed", "Cannot delete default profile.")
+                return
+            self.settings.pop(name, None)
+            self.save_settings()
+            load_list()
+            self.refresh_host_dropdown()
+
+        tk.Button(btn_frame, text="Save", command=add_or_update, bg=self.COLORS["accent"], fg="#121212", relief="flat", padx=10, pady=4).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="Delete", command=delete, bg="#b33a3a", fg="#ffffff", relief="flat", padx=10, pady=4).pack(side="left", padx=4)
+        tk.Button(btn_frame, text="Close", command=dlg.destroy, bg=self.COLORS["input"], fg=self.COLORS["fg"], relief="flat", padx=10, pady=4).pack(side="right", padx=4)
+
+        load_list()
+
         # Context Menu
         self.context_menu = tk.Menu(self, tearoff=0, bg=COLORS["panel"], fg=COLORS["fg"], font=FONT_MAIN)
         self.context_menu.add_command(label="Download to Local", command=self.download_selection)
@@ -271,8 +462,15 @@ class RemoteExplorer(tk.Tk):
 
     def connect_ssh(self):
         try:
+            # Determine active host settings
+            host_profile = self.get_active_host_profile()
+
+            target_host = host_profile.get("host", HOST)
+            target_user = host_profile.get("user", USER)
+            target_key = self.resolve_key_path(host_profile)
+
             # Assumes SSH Key Auth. Use connect(password=...) if needed.
-            self.ssh.connect(HOST, username=USER, key_filename=KEY_PATH)
+            self.ssh.connect(target_host, username=target_user, key_filename=target_key)
             self.sftp = self.ssh.open_sftp()
             
             # --- DEPLOY HOST FUNCTIONS ---

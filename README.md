@@ -1,6 +1,6 @@
 # Neural SSH Explorer
 
-A "Split-Brain" SSH file explorer that uses GPT-5-mini to interpret natural language commands for file navigation, searching, and copying.
+An AI-assisted SSH wrapper with a modern GUI and GPT-5-mini integration. It lets you browse remote (or local) files, preview content, run AI-driven search/navigation, and safely copy files with a double-confirmation flow. It also supports multiple SSH host profiles, tray minimization, and a quick prompt from the system tray.
 
 ## Prerequisites
 
@@ -43,10 +43,26 @@ A "Split-Brain" SSH file explorer that uses GPT-5-mini to interpret natural lang
     - "Go to the Downloads folder"
     - "Copy the latest log file to my desktop"
 
+4.  **Tray Mode**:
+    - Closing the window hides it to the system tray (if `pystray` is installed).
+    - Tray menu: Show/Hide, New Window, Quick Surf (inline prompt), Exit.
+    - Quick Surf opens a tiny prompt; Enter submits and brings the main window forward with your prompt sent.
+
 ## Configuration
 
-The client is configured by default to connect to `localhost`. You can modify `client.py` to change:
-- `HOST`: Remote IP address (default: `127.0.0.1`)
-- `USER`: SSH Username (set this to your username)
-- `KEY_PATH`: Path to private key (default: `~/.ssh/id_ed25519`)
+- **Host Profiles**: Stored in `~/.neural_ssh_hosts.json` and editable via the in-app Settings dialog.
+  Example JSON:
+  ```json
+  {
+    "default": { "host": "127.0.0.1", "user": "user", "key_path": "~/.ssh/id_ed25519" },
+    "myserver": { "host": "my.server.com", "user": "alice", "key_path": "~/.ssh/id_rsa" }
+  }
+  ```
+- **Key Selection**: Uses profile `key_path` if set, otherwise `SSH_KEY_PATH` env, otherwise first existing key in `~/.ssh` (or your SSH agent if available).
+- **Defaults**: If no profiles exist, a `default` profile is used (host `127.0.0.1`, user = your OS username).
+
+## Remote Behavior
+- On connect, the client uploads `host_functions.zsh` to the remote home as `~/.host_functions.zsh`.
+- Every remote command is prefixed with `source ~/.host_functions.zsh; ...` so it works without touching `~/.zshrc`.
+- Works without a desktop login on the host as long as `sshd` is running and reachable.
 
