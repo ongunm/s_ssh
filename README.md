@@ -7,15 +7,16 @@ An AI-assisted SSH wrapper with a modern GUI and GPT-5-mini integration. It lets
 - Python 3
 - `pip`
 - Local SSH server running (`sshd`)
-- SSH keys configured (default: `~/.ssh/id_ed25519`)
+- SSH keys configured (e.g., `~/.ssh/id_ed25519` or your own key path)
 - OpenAI API Key stored in `~/keys/openaikey.json`
+- macOS: works too; ensure Tk is installed (python.org build or `brew install python-tk`) and allow tray icon permissions if using the tray.
 
 ## Installation
 
 1.  **Dependencies**:
     Install the required Python packages:
     ```bash
-    pip install paramiko openai pillow tk
+    pip install -r requirements.txt
     ```
 
 2.  **Host Script**:
@@ -65,4 +66,10 @@ An AI-assisted SSH wrapper with a modern GUI and GPT-5-mini integration. It lets
 - On connect, the client uploads `host_functions.zsh` to the remote home as `~/.host_functions.zsh`.
 - Every remote command is prefixed with `source ~/.host_functions.zsh; ...` so it works without touching `~/.zshrc`.
 - Works without a desktop login on the host as long as `sshd` is running and reachable.
+
+## macOS Notes
+- Fully supported. If the tray icon doesn’t appear, the app still runs; start with `python3 client.py`.
+- Ensure Tk is available (install via python.org or `brew install python-tk`).
+- Approve tray/icon permissions if prompted.
+- SSH, key handling, and auto-upload of `host_functions.zsh` work the same as on Linux.
 

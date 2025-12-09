@@ -1,0 +1,6 @@
+paramiko
+openai
+pillow
+tk
+pystray
+
